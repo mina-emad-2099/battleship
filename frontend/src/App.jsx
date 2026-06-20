@@ -32,6 +32,8 @@ export default function App() {
     const [enemyBoard, setEnemyBoard] = useState(createEmptyBoard());
     const [fleetToPlace, setFleetToPlace] = useState(INITIAL_FLEET);
     const [isHorizontal, setIsHorizontal] = useState(true);
+    const [placementError, setPlacementError] = useState("");
+    const [deployedSkins, setDeployedSkins] = useState([]);
 
     // --- COMBAT STATES ---
     const [isMyTurn, setIsMyTurn] = useState(false);
@@ -160,6 +162,14 @@ export default function App() {
         const currentShip = fleetToPlace[0];
 
         if (canPlaceShip(myBoard, x, y, currentShip.size, isHorizontal)) {
+            setPlacementError("");
+            setDeployedSkins(prev => [...prev, {
+                id: currentShip.id,         // e.g. "carrier"
+                row: x,                     
+                col: y,                     
+                size: currentShip.size,     // e.g. 5
+                isHorizontal: isHorizontal
+            }]);
             const newBoard = structuredClone(myBoard);
             for (let i = 0; i < currentShip.size; i++) {
                 if (isHorizontal) newBoard[x][y + i] = 1;
@@ -178,6 +188,10 @@ export default function App() {
                 // every future shot against us.
                 socket.emit('submit-fleet', { roomId: roomIdRef.current, board: newBoard });
             }
+        }
+        else {
+            setPlacementError("Cannot place it like this");
+            setTimeout(() => setPlacementError(""), 3000);
         }
     };
 
@@ -237,6 +251,7 @@ export default function App() {
                                 <button onClick={() => setIsHorizontal(!isHorizontal)}>
                                     Rotate: {isHorizontal ? "Horizontal ➔" : "Vertical ⬇"}
                                 </button>
+                                {placementError && <p style={{ color: '#f87171', marginTop: '10px', fontWeight: 'bold' }}>{placementError}</p>}
                             </>
                         )}
                         {gamePhase === 'ready' && <h2 style={{ color: '#facc15' }}>Waiting for opponent to finish deployment...</h2>}
