@@ -41,56 +41,54 @@ function createEmptyRoom() {
         ready: {},
         health: {},
         turn: null,
-        started: false
+        started: false,
+        ships: {} 
     };
 }
 
-// Re-validates a submitted board so a tampered client can't cheat at placement
-// (wrong ship count, overlapping ships, ships that don't match the fleet, etc).
-function isValidFleetBoard(board) {
+// Upgraded Validation: Allows touching ships by using the ships ledger
+function isValidFleetBoard(board, ships) {
     if (!Array.isArray(board) || board.length !== BOARD_SIZE) return false;
+    if (!Array.isArray(ships)) return false; // Missing the ships ledger
 
-    let totalShipCells = 0;
-    for (let x = 0; x < BOARD_SIZE; x++) {
-        if (!Array.isArray(board[x]) || board[x].length !== BOARD_SIZE) return false;
-        for (let y = 0; y < BOARD_SIZE; y++) {
-            const cell = board[x][y];
-            if (cell !== 0 && cell !== 1) return false; // only water/ship allowed at submission time
-            if (cell === 1) totalShipCells++;
-        }
-    }
-    if (totalShipCells !== TOTAL_SHIP_CELLS) return false;
+    // 1. Verify the exact correct fleet was submitted [5, 4, 3]
+    const actualSizes = ships.map(s => s.size).sort((a, b) => b - a);
+    const expectedSizes = [...FLEET_SIZES].sort((a, b) => b - a);
+    if (actualSizes.length !== expectedSizes.length) return false;
+    if (!actualSizes.every((len, i) => len === expectedSizes[i])) return false;
 
-    // Walk the board, measuring each contiguous run of ship cells, and confirm
-    // the set of run lengths matches the expected fleet exactly.
-    const visited = Array(BOARD_SIZE).fill(null).map(() => Array(BOARD_SIZE).fill(false));
-    const shipLengths = [];
+    const seenCells = new Set();
+    let boardOneCount = 0;
 
+    // 2. Count the raw '1's on the matrix (Anti-cheat check)
     for (let x = 0; x < BOARD_SIZE; x++) {
         for (let y = 0; y < BOARD_SIZE; y++) {
-            if (board[x][y] !== 1 || visited[x][y]) continue;
+            if (board[x][y] === 1) boardOneCount++;
+        }
+    }
+    if (boardOneCount !== TOTAL_SHIP_CELLS) return false;
 
-            let hLen = 0;
-            while (y + hLen < BOARD_SIZE && board[x][y + hLen] === 1) hLen++;
-            let vLen = 0;
-            while (x + vLen < BOARD_SIZE && board[x + vLen][y] === 1) vLen++;
-
-            if (hLen > 1 && vLen > 1) return false; // real ships are straight, not L/cross shaped
-
-            if (hLen >= vLen) {
-                for (let i = 0; i < hLen; i++) visited[x][y + i] = true;
-                shipLengths.push(hLen);
-            } else {
-                for (let i = 0; i < vLen; i++) visited[x + i][y] = true;
-                shipLengths.push(vLen);
-            }
+    // 3. Verify every individual ship's coordinates
+    for (const ship of ships) {
+        for (let i = 0; i < ship.size; i++) {
+            // Re-calculate the ship's path based on its starting point and orientation
+            const x = ship.isHorizontal ? ship.row : ship.row + i;
+            const y = ship.isHorizontal ? ship.col + i : ship.col;
+            
+            // Rule A: Cannot go off the map
+            if (x < 0 || x >= BOARD_SIZE || y < 0 || y >= BOARD_SIZE) return false;
+            
+            // Rule B: Cannot overlap another ship (same cell claimed twice)
+            const cellKey = `${x},${y}`;
+            if (seenCells.has(cellKey)) return false;
+            seenCells.add(cellKey);
+            
+            // Rule C: The Matrix MUST actually have a '1' at this coordinate
+            if (board[x][y] !== 1) return false;
         }
     }
 
-    const actual = shipLengths.sort((a, b) => b - a);
-    const expected = [...FLEET_SIZES].sort((a, b) => b - a);
-    if (actual.length !== expected.length) return false;
-    return actual.every((len, i) => len === expected[i]);
+    return true; // Passed all checks!
 }
 
 io.on('connection', (socket) => {
@@ -136,13 +134,24 @@ io.on('connection', (socket) => {
         const room = rooms[roomId];
         if (!room || !room.players.includes(socket.id)) return;
 
-        if (!isValidFleetBoard(payload.board)) {
+        if (!isValidFleetBoard(payload.board, payload.ships)) {
             socket.emit('fleet-rejected', 'Invalid fleet layout.');
             return;
         }
 
         room.boards[socket.id] = payload.board;
         room.ready[socket.id] = true;
+        if (payload.ships) {
+            room.ships[socket.id] = payload.ships.map(skin => ({
+                id: skin.id,
+                size: skin.size,
+                hits: 0, // Starts at 0 damage
+                // Generate every "x,y" coordinate this ship sits on
+                coords: Array.from({ length: skin.size }).map((_, i) =>
+                    skin.isHorizontal ? `${skin.row},${skin.col + i}` : `${skin.row + i},${skin.col}`
+                )
+            }));
+        }
         socket.to(roomId).emit('opponent-ready');
 
         const bothReady = room.players.length === 2 && room.players.every((id) => room.ready[id]);
@@ -176,8 +185,20 @@ io.on('connection', (socket) => {
         const isHit = defenderBoard?.[x]?.[y] === 1;
         const status = isHit ? 'hit' : 'miss';
 
-        if (isHit) room.health[opponentId] -= 1;
+        let sunkShipName = null; // Start by assuming nothing sank
 
+        if (isHit) { 
+            room.health[opponentId] -= 1;
+            
+            // 👇 ADD THIS: Find WHICH ship got hit
+            const hitShip = room.ships[opponentId].find(ship => ship.coords.includes(cellKey));
+            if (hitShip) {
+                hitShip.hits += 1; // Add damage
+                if (hitShip.hits === hitShip.size) {
+                    sunkShipName = hitShip.id; // The ship's health reached 0!
+                }
+            }
+        }
         // Hits keep the turn with the attacker ("go again"); a miss passes it
         // to the opponent. Flip this ternary if you want classic alternating turns.
         room.turn = isHit ? socket.id : opponentId;
@@ -189,7 +210,8 @@ io.on('connection', (socket) => {
             attackerId: socket.id,
             defenderId: opponentId,
             defenderHealth: room.health[opponentId],
-            nextTurn: room.turn
+            nextTurn: room.turn,
+            sunkShip: sunkShipName // <-- Send the bad news to the players
         });
 
         if (room.health[opponentId] <= 0) {

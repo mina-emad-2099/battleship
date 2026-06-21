@@ -43,6 +43,7 @@ export default function App() {
     // --- SYNC STATES ---
     const [myReady, setMyReady] = useState(false);
     const [opponentReady, setOpponentReady] = useState(false);
+    const [announcement, setAnnouncement] = useState("");
 
     // Refs mirror the latest roomId / our own socket id so the long-lived
     // listener effect below never has to re-subscribe mid-game. (The original
@@ -96,8 +97,18 @@ export default function App() {
         // Server is the single source of truth for every shot — it knows both
         // boards, so it determines hit/miss itself rather than trusting whichever
         // client happens to report a result.
-        socket.on('attack-result', ({ x, y, status, attackerId, defenderId, defenderHealth, nextTurn }) => {
+        socket.on('attack-result', ({ x, y, status, attackerId, defenderId, defenderHealth, nextTurn,sunkShip }) => {
             const myId = myIdRef.current;
+
+            if (sunkShip) {
+                if (attackerId === myId) {
+                    setAnnouncement(`💥 Target destroyed! You sunk the enemy ${sunkShip}!`);
+                } else {
+                    setAnnouncement(`🚨 Mayday! The enemy sunk our ${sunkShip}!`);
+                }
+                // Auto-hide the message after 4 seconds
+                setTimeout(() => setAnnouncement(""), 4000); 
+            }
 
             if (attackerId === myId) {
                 // This was my shot — paint the result on the enemy radar.
@@ -125,6 +136,7 @@ export default function App() {
         socket.on('game-over', ({ youWin }) => {
             setGamePhase('game-over');
             setEndgameMessage(youWin ? "VICTORY! Enemy fleet destroyed. 🏆" : "DEFEAT. Your fleet was wiped out. 💀");
+            setAnnouncement("retry");
         });
 
         socket.on('opponent-left', () => {
@@ -185,10 +197,21 @@ export default function App() {
             if (remainingShips.length === 0) {
                 setGamePhase('ready');
                 setMyReady(true);
-                // Hand our finished fleet to the server — it re-validates the
-                // placement and becomes the authoritative copy used to resolve
-                // every future shot against us.
-                socket.emit('submit-fleet', { roomId: roomIdRef.current, board: newBoard });
+                // Create the final ship data manually so we don't have to wait for React state to update
+                const finalShipData = {
+                    id: currentShip.id,
+                    row: x,
+                    col: y,
+                    size: currentShip.size,
+                    isHorizontal: isHorizontal
+                };
+                
+                // Send the board AND the ships to the server
+                socket.emit('submit-fleet', { 
+                    roomId: roomIdRef.current, 
+                    board: newBoard,
+                    ships: [...deployedSkins, finalShipData] // <--- Here is the magic!
+                });
             }
         }
         else {
@@ -247,6 +270,7 @@ export default function App() {
             {gamePhase !== 'lobby' && gamePhase !== 'opponent-left' && (
                 <>
                     <div className="hud">
+                        {announcement && <h2 style={{ color: announcement.includes('💥') ? '#4ade80' : '#f87171', fontSize: '2rem' }}>{announcement}</h2>}
                         {gamePhase === 'placement' && (
                             <>
                                 <h2>Deploy: {fleetToPlace[0]?.id} (Len: {fleetToPlace[0]?.size})</h2>
