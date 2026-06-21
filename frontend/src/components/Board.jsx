@@ -14,7 +14,7 @@ const CELL_DISPLAY = {
 const COLUMN_LABELS = Array.from({ length: 10 }, (_, i) => i + 1);
 const ROW_LABELS = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J'];
 
-export default function Board({ matrix, onCellClick, variant = 'own', isScanning = false }) {
+export default function Board({ matrix, onCellClick, variant = 'own', isScanning = false, deployedSkins = [] }) {
     const handleActivate = (x, y) => onCellClick(x, y);
 
     return (
@@ -30,6 +30,10 @@ export default function Board({ matrix, onCellClick, variant = 'own', isScanning
                         <div className="coord-label" aria-hidden="true">{ROW_LABELS[x]}</div>
                         {row.map((cellValue, y) => {
                             const { className, icon } = CELL_DISPLAY[cellValue] ?? CELL_DISPLAY[0];
+                            
+                            // Check if a ship's starting point is exactly at this (x, y) coordinate
+                            const skinData = variant === 'own' ? deployedSkins.find(s => s.row === x && s.col === y) : null;
+
                             return (
                                 <div
                                     key={`${x}-${y}`}
@@ -44,8 +48,29 @@ export default function Board({ matrix, onCellClick, variant = 'own', isScanning
                                             handleActivate(x, y);
                                         }
                                     }}
+                                    // 👇 Crucial: relative positioning anchors the absolute image to this specific square
+                                    style={{ position: 'relative' }} 
                                 >
                                     {icon}
+
+                                    {/* 👇 Render the skin if it belongs on this cell */}
+                                    {skinData && (
+                                        <img 
+                                            src={`/ships/${skinData.id.toLowerCase()}-${skinData.isHorizontal ? 'h' : 'v'}.png`}                                          
+                                            alt={skinData.id}
+                                            style={{
+                                                position: 'absolute',
+                                                top: 0,
+                                                left: 0,
+                                                // Spans the image across multiple grid cells based on size
+                                                width: skinData.isHorizontal ? `calc(100% * ${skinData.size})` : '100%',
+                                                height: skinData.isHorizontal ? '100%' : `calc(100% * ${skinData.size})`,
+                                                pointerEvents: 'none', // Lets clicks pass through to the water below
+                                                zIndex: 10,
+                                                objectFit: 'contain'
+                                            }}
+                                        />
+                                    )}
                                 </div>
                             );
                         })}

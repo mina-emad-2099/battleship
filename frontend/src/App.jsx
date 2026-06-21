@@ -83,6 +83,8 @@ export default function App() {
         socket.on('fleet-rejected', (message) => {
             console.error('Fleet rejected by server:', message);
             setLobbyError('Your fleet was rejected by the server. Please refresh and try again.');
+            alert("SERVER REJECTED YOUR BOARD! (Make sure ships aren't touching!). Refreshing...");
+            window.location.reload();
         });
 
         // Server confirms both fleets are in and tells each socket whether it goes first.
@@ -273,7 +275,7 @@ export default function App() {
                     <div className="boards-wrapper">
                         <div className="board-section">
                             <h3>Your Fleet</h3>
-                            <Board matrix={myBoard} onCellClick={handlePlacementClick} />
+                            <Board matrix={myBoard} onCellClick={handlePlacementClick} variant="own" deployedSkins={deployedSkins} />
                         </div>
 
                         {gamePhase !== 'placement' && (
